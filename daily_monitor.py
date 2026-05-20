@@ -22,9 +22,16 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from datetime import date
 
+import base64
+import io
+
 import numpy as np
 import pandas as pd
 import scipy.optimize as sco
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import yfinance as yf
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -140,6 +147,103 @@ def stats(pnl, label=""):
                 max_dd=dd.min(), calmar=calmar, total_ret=total, cur_dd=cur_dd)
 
 
+# ── Chart builder ─────────────────────────────────────────────────────────────
+
+OS_START = "2026-05-01"
+
+def _make_chart(series_list, title, figsize=(11, 3.5)):
+    """Shared chart renderer. series_list: [(pnl, label, color, lw), ...]"""
+    fig, ax = plt.subplots(figsize=figsize)
+    fig.patch.set_facecolor("#ffffff")
+    ax.set_facecolor("#fafafa")
+    for pnl, label, color, lw in series_list:
+        pnl = pnl.dropna()
+        cum = (1 + pnl).cumprod() - 1
+        ax.plot(pd.to_datetime(pnl.index), cum * 100, color=color, lw=lw, label=label)
+    ax.axhline(0, color="#aaa", lw=0.7, ls=":")
+    ax.set_ylabel("Cumulative Return (%)", fontsize=10)
+    ax.set_title(title, fontsize=10, color="#444", pad=6)
+    ax.legend(fontsize=9, loc="upper left", framealpha=0.9)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b '%y"))
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
+    fig.autofmt_xdate(rotation=30, ha="right")
+    ax.grid(axis="y", alpha=0.25, lw=0.7)
+    ax.grid(axis="x", alpha=0.15, lw=0.5)
+    ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout(pad=1.2)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode("ascii")
+
+
+def build_cumret_chart(pnl_mom, pnl_rev, pnl_comb):
+    """Full-history chart with IS solid / OS dotted."""
+    fig, ax = plt.subplots(figsize=(11, 4))
+    fig.patch.set_facecolor("#ffffff")
+    ax.set_facecolor("#fafafa")
+
+    for pnl, label, color, lw in [
+        (pnl_comb, "Combined",           "#2ca02c", 2.2),
+        (pnl_mom,  "Momentum",           "#1f77b4", 1.4),
+        (pnl_rev,  "Reversal (VIX>20)",  "#ff7f0e", 1.4),
+    ]:
+        pnl = pnl.dropna()
+        cum = (1 + pnl).cumprod() - 1
+        is_mask = pnl.index < OS_START
+        os_mask = pnl.index >= OS_START
+        if is_mask.any():
+            ax.plot(pd.to_datetime(pnl.index[is_mask]), cum[is_mask] * 100,
+                    color=color, lw=lw, label=label)
+        if os_mask.any():
+            stitch = pnl.index[is_mask][-1] if is_mask.any() else pnl.index[0]
+            os_ext = pnl.index[pnl.index >= stitch]
+            ax.plot(pd.to_datetime(os_ext), cum[os_ext] * 100,
+                    color=color, lw=lw, ls=":", alpha=0.9, label="_nolegend_")
+
+    os_start_dt = pd.to_datetime(OS_START)
+    ax.axvline(os_start_dt, color="#888", lw=1.0, ls="--", alpha=0.7)
+    ax.axvspan(os_start_dt, pd.to_datetime(pnl_comb.dropna().index[-1]),
+               alpha=0.04, color="#000")
+    ylim = ax.get_ylim()
+    ax.text(os_start_dt, ylim[1], " OS", fontsize=8, color="#888", va="top")
+    ax.axhline(0, color="#aaa", lw=0.7, ls=":")
+    ax.set_ylabel("Cumulative Return (%)", fontsize=10)
+    ax.legend(fontsize=9, loc="upper left", framealpha=0.9)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b '%y"))
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=6))
+    fig.autofmt_xdate(rotation=30, ha="right")
+    ax.grid(axis="y", alpha=0.25, lw=0.7)
+    ax.grid(axis="x", alpha=0.15, lw=0.5)
+    ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout(pad=1.2)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode("ascii")
+
+
+def build_os_chart(pnl_mom, pnl_rev, pnl_comb):
+    """OS-only chart: cumulative return rebased to 0 at OS_START."""
+    series = [
+        (pnl_comb, "Combined",           "#2ca02c", 2.2),
+        (pnl_mom,  "Momentum",           "#1f77b4", 1.4),
+        (pnl_rev,  "Reversal (VIX>20)",  "#ff7f0e", 1.4),
+    ]
+    # Clip to OS window
+    os_series = [(s[0][s[0].index >= OS_START],) + s[1:] for s in series]
+    # Check any data exists
+    if all(len(s[0]) == 0 for s in os_series):
+        return None
+    return _make_chart(
+        os_series,
+        title=f"Out-of-Sample Performance (from {OS_START})",
+        figsize=(11, 3.2),
+    )
+
+
 # ── HTML report builder ────────────────────────────────────────────────────────
 
 def pct(v, signed=True):
@@ -158,7 +262,8 @@ def color_cell(v, good_pos=True):
 def build_html(
     run_date, last5, week_blocks, ytd_stats,
     full_stats, vix_last, spy_ytd,
-    mom_longs, mom_shorts, rev_longs, rev_active
+    mom_longs, mom_shorts, rev_longs, rev_active,
+    etf_names=None, ticker_rets=None, chart_b64=None, os_chart_b64=None
 ):
     def stat_row(s, bold=False):
         b = "<b>" if bold else ""
@@ -178,13 +283,16 @@ def build_html(
     for _, row in last5.iterrows():
         vix_val = row.get("VIX", np.nan)
         gate = "✓" if (not np.isnan(vix_val) and vix_val > VIX_GATE) else "—"
+        is_intra = row.get("intraday", False)
+        style = ' style="background:#fffde7;font-style:italic"' if is_intra else ""
+        vix_str = f"{vix_val:.1f}" if not np.isnan(vix_val) else "—"
         day_rows += (
-            f"<tr><td>{row['Date']}</td>"
+            f"<tr{style}><td>{row['Date']}</td>"
             + color_cell(row['Combined'])
             + color_cell(row['Momentum'])
             + color_cell(row['Reversal'])
             + color_cell(row['SPY'])
-            + f"<td>{vix_val:.1f}</td><td>{gate}</td></tr>"
+            + f"<td>{vix_str}</td><td>{gate}</td></tr>"
         )
 
     # Week blocks rows
@@ -210,13 +318,54 @@ def build_html(
     )
 
     # Position tables
-    def pos_table(names, side, color):
-        rows = "".join(
-            f'<tr><td style="font-family:monospace">{t}</td>'
-            f'<td style="color:{color};text-align:center">{side}</td></tr>'
-            for t in names
+    nm = etf_names or {}
+    tr = ticker_rets or {}
+
+    def ret_td(v):
+        if np.isnan(v): return '<td style="color:#aaa">—</td>'
+        color = "#27ae60" if v > 0 else "#e74c3c"
+        return f'<td style="color:{color}">{v:+.1%}</td>'
+
+    def pos_table(tickers, side, side_color, descending=True):
+        sorted_tickers = sorted(
+            tickers,
+            key=lambda t: tr.get(t, {}).get("252d", np.nan),
+            reverse=descending,
         )
-        return rows
+        header = (
+            '<tr>'
+            '<th style="text-align:left;width:55px">Ticker</th>'
+            '<th style="text-align:left">Name</th>'
+            f'<th style="color:{side_color};width:50px">Side</th>'
+            '<th style="width:60px">1d</th>'
+            '<th style="width:60px">5d</th>'
+            '<th style="width:70px">252d</th>'
+            '</tr>'
+        )
+        rows = "".join(
+            f'<tr>'
+            f'<td style="font-family:monospace;font-weight:600">{t}</td>'
+            f'<td style="color:#555;font-size:12px">{nm.get(t, "")}</td>'
+            f'<td style="color:{side_color};text-align:center;font-weight:600">{side}</td>'
+            + ret_td(tr.get(t, {}).get("1d", np.nan))
+            + ret_td(tr.get(t, {}).get("5d", np.nan))
+            + ret_td(tr.get(t, {}).get("252d", np.nan))
+            + '</tr>'
+            for t in sorted_tickers
+        )
+        avgs = {
+            lb: np.nanmean([tr.get(t, {}).get(lb, np.nan) for t in sorted_tickers])
+            for lb in ("1d", "5d", "252d")
+        }
+        avg_row = (
+            f'<tr style="background:#f7f8fa;font-weight:700;border-top:2px solid #dde">'
+            f'<td colspan="3" style="color:#444">Average</td>'
+            + ret_td(avgs["1d"])
+            + ret_td(avgs["5d"])
+            + ret_td(avgs["252d"])
+            + '</tr>'
+        )
+        return header + rows + avg_row
 
     rev_status = (
         f'<span style="color:#27ae60">Active (VIX={vix_last:.1f} > {VIX_GATE})</span>'
@@ -243,6 +392,18 @@ def build_html(
     .short-tag{background:#fdedec;color:#e74c3c}
     """
 
+    def _img_card(b64, caption):
+        return (
+            f'<div class="card" style="padding:12px 16px">'
+            f'<img src="data:image/png;base64,{b64}" '
+            f'style="width:100%;max-width:900px;display:block;margin:0 auto" alt="{caption}"/>'
+            f'<div style="text-align:center;font-size:11px;color:#999;margin-top:4px">{caption}</div>'
+            f'</div>'
+        )
+
+    chart_html    = _img_card(chart_b64,    f"IS (solid) through {OS_START} · OS (dotted) thereafter") if chart_b64    else ""
+    os_chart_html = _img_card(os_chart_b64, f"Out-of-sample only — rebased to 0 at {OS_START}")        if os_chart_b64 else ""
+
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
     <style>{css}</style></head><body>
     <div class="card">
@@ -250,6 +411,8 @@ def build_html(
       <div class="subtitle">Daily Monitor — {run_date} &nbsp;|&nbsp; VIX: {vix_last:.1f}
         &nbsp;|&nbsp; Reversal leg: {rev_status}</div>
     </div>
+    {chart_html}
+    {os_chart_html}
 
     <div class="card">
       <h2>Last 5 Trading Days</h2>
@@ -259,8 +422,8 @@ def build_html(
             <th>VIX</th><th>Rev Active</th></tr>
         {day_rows}
         <tr style="background:#f9f9f9;font-weight:600">
-          <td>Week total</td>
-          {"".join(color_cell(last5[c].add(1).prod()-1) for c in ['Combined','Momentum','Reversal','SPY'])}
+          <td>Week (excl. today)</td>
+          {"".join(color_cell(last5[~last5.get('intraday', pd.Series(False, index=last5.index)).astype(bool)][c].add(1).prod()-1) for c in ['Combined','Momentum','Reversal','SPY'])}
           <td colspan="2"></td></tr>
       </table>
     </div>
@@ -290,19 +453,21 @@ def build_html(
 
     <div class="card">
       <h2>Current Positions</h2>
-      <table style="width:48%;display:inline-table;vertical-align:top;margin-right:4%">
-        <tr><th style="text-align:left" colspan="2">Momentum Longs ({len(mom_longs)})</th></tr>
-        {pos_table(mom_longs, 'LONG', '#27ae60')}
+      <table style="width:100%;margin-bottom:16px">
+        <tr><td colspan="6" style="font-weight:700;color:#27ae60;padding:6px 0;border:none">
+          Momentum Longs ({len(mom_longs)})</td></tr>
+        {pos_table(mom_longs, 'LONG', '#27ae60', descending=True)}
       </table>
-      <table style="width:48%;display:inline-table;vertical-align:top">
-        <tr><th style="text-align:left" colspan="2">Momentum Shorts ({len(mom_shorts)})</th></tr>
-        {pos_table(mom_shorts, 'SHORT', '#e74c3c')}
+      <table style="width:100%;margin-bottom:16px">
+        <tr><td colspan="6" style="font-weight:700;color:#e74c3c;padding:6px 0;border:none">
+          Momentum Shorts ({len(mom_shorts)})</td></tr>
+        {pos_table(mom_shorts, 'SHORT', '#e74c3c', descending=False)}
       </table>
-      {"" if not rev_active else f'''
-      <br><table style="margin-top:12px">
-        <tr><th style="text-align:left" colspan="2">Reversal Longs ({len(rev_longs)}) — VIX active</th></tr>
-        {pos_table(rev_longs, 'LONG', '#2980b9')}
-      </table>'''}
+      <table style="width:100%">
+        <tr><td colspan="6" style="font-weight:700;color:{'#2980b9' if rev_active else '#aaa'};padding:6px 0;border:none">
+          Reversal Longs ({len(rev_longs)}) — {'VIX active ✓' if rev_active else f'Inactive (VIX={vix_last:.1f} ≤ {VIX_GATE})'}</td></tr>
+        {pos_table(rev_longs, 'LONG', '#2980b9' if rev_active else '#bbb', descending=True)}
+      </table>
     </div>
 
     <div style="color:#aaa;font-size:11px;text-align:center;margin-top:12px">
@@ -374,6 +539,95 @@ def main():
     pnl_comb = combine_ev(pnl_mom, pnl_rev)
     print(f"Combined: {pnl_comb.index[0]} -> {pnl_comb.index[-1]}")
 
+    # ── Current positions (needed before intraday) ────────────────────────────
+    mom_longs  = sorted(mom_weights[mom_weights > 0.001].index.tolist())
+    mom_shorts = sorted(mom_weights[mom_weights < -0.001].index.tolist())
+    rev_active = vix_last > VIX_GATE
+    if rev_active:
+        rev_longs = sorted(rev_weights[rev_weights > 0.001].index.tolist())
+    else:
+        # compute would-be basket from latest 5d signal regardless of VIX gate
+        rev_sig_last = close.pct_change(REV_LB).iloc[-1].dropna()
+        n_q = max(1, len(rev_sig_last) // 4)
+        rev_longs = sorted(rev_sig_last.nsmallest(n_q).index.tolist())
+
+    # ── Intraday prices for today ─────────────────────────────────────────────
+    print("Fetching intraday prices ...")
+    all_intraday_tickers = list(close.columns) + ["SPY", "^VIX"]
+    try:
+        intra_raw = yf.download(
+            all_intraday_tickers, period="1d", interval="1m",
+            auto_adjust=True, progress=False,
+        )
+        intra_close = intra_raw["Close"] if isinstance(intra_raw.columns, pd.MultiIndex) else intra_raw
+        intra_close = intra_close.dropna(how="all")
+
+        # latest intraday price per ticker
+        latest_price = intra_close.iloc[-1]
+
+        # prev close = yesterday's close from parquet (for ETFs) or SPY daily
+        # build a prev_close series aligned to all intraday tickers
+        prev_close_dict = {}
+        for t in close.columns:
+            s = close[t].dropna()
+            if len(s) >= 1:
+                prev_close_dict[t] = float(s.iloc[-1])
+        # SPY and VIX from downloaded daily
+        spy_prev = spy_raw["Close"].squeeze().dropna()
+        prev_close_dict["SPY"] = float(spy_prev.iloc[-1])
+        vix_prev = vix_raw["Close"].squeeze().dropna()
+        prev_close_dict["^VIX"] = float(vix_prev.iloc[-1])
+
+        prev_price = pd.Series(prev_close_dict)
+        intra_ret = (latest_price / prev_price - 1).dropna()
+
+        # Intraday time label
+        last_bar_time = intra_close.index[-1].tz_convert("America/New_York")
+        intra_label = f"Today {last_bar_time.strftime('%H:%M ET')} (intraday)"
+
+        # Approximate strategy P&L using yesterday's weights × today's intraday returns
+        def _weighted_pnl(weights):
+            tickers_in = [t for t in weights.index if t in intra_ret.index]
+            if not tickers_in:
+                return np.nan
+            return float((weights[tickers_in] * intra_ret[tickers_in]).sum())
+
+        # Equal-vol weights for today: reuse last-row allocation ratio
+        # (combine_ev already baked into pnl_comb; approximate as 50/50 by vol)
+        df_ev = pd.DataFrame({"mom": pnl_mom, "rev": pnl_rev}).dropna()
+        ia = 1.0 / df_ev["mom"].rolling(VOL_WIN).std().replace(0, np.nan)
+        ib = 1.0 / df_ev["rev"].rolling(VOL_WIN).std().replace(0, np.nan)
+        t_ev = ia + ib
+        w_mom_today = float((ia / t_ev).iloc[-1])
+        w_rev_today = float((ib / t_ev).iloc[-1])
+
+        intra_mom = _weighted_pnl(mom_weights)
+        intra_rev = _weighted_pnl(rev_weights) if rev_active else 0.0
+        intra_comb = (w_mom_today * intra_mom + w_rev_today * intra_rev
+                      if not (np.isnan(intra_mom) or np.isnan(intra_rev))
+                      else np.nan)
+        intra_spy = float(intra_ret.get("SPY", np.nan))
+        intra_vix = float(latest_price.get("^VIX", np.nan))
+
+        today_row = {
+            "Date":     intra_label,
+            "Combined": intra_comb,
+            "Momentum": intra_mom,
+            "Reversal": intra_rev,
+            "SPY":      intra_spy,
+            "VIX":      intra_vix,
+            "intraday": True,
+        }
+        print(f"  Intraday as of {last_bar_time.strftime('%H:%M ET')}: "
+              f"Combined={intra_comb:+.2%}  Momentum={intra_mom:+.2%}  SPY={intra_spy:+.2%}  VIX={intra_vix:.1f}")
+
+        intra_ret_today = intra_ret  # stored for later override
+
+    except Exception as e:
+        print(f"  Intraday fetch failed: {e}")
+        today_row = None
+        intra_ret_today = None
+
     # ── Last 5 days ───────────────────────────────────────────────────────────
     last5_dates = pnl_comb.index[-5:].tolist()
     rows = []
@@ -385,7 +639,10 @@ def main():
             "Reversal": pnl_rev.get(d, np.nan),
             "SPY":      spy_ret.get(d, np.nan),
             "VIX":      vix.get(d, np.nan),
+            "intraday": False,
         })
+    if today_row:
+        rows.append(today_row)
     last5_df = pd.DataFrame(rows)
 
     print(f"\n{'Date':<12} {'Combined':>10} {'Momentum':>10} {'Reversal':>10} {'SPY':>9}  VIX")
@@ -434,12 +691,6 @@ def main():
         "spy":      stats(spy_ret,    "SPY"),
     }
 
-    # ── Current positions ─────────────────────────────────────────────────────
-    mom_longs  = sorted(mom_weights[mom_weights > 0.001].index.tolist())
-    mom_shorts = sorted(mom_weights[mom_weights < -0.001].index.tolist())
-    rev_longs  = sorted(rev_weights[rev_weights > 0.001].index.tolist())
-    rev_active = vix_last > VIX_GATE
-
     print(f"\nMomentum longs  ({len(mom_longs)}): {', '.join(mom_longs)}")
     print(f"Momentum shorts ({len(mom_shorts)}): {', '.join(mom_shorts)}")
     if rev_active:
@@ -447,11 +698,43 @@ def main():
     else:
         print(f"Reversal: inactive (VIX={vix_last:.1f} <= {VIX_GATE})")
 
+    # ── Load ETF names ────────────────────────────────────────────────────────
+    names_file = HERE / "etf_names.csv"
+    etf_names = {}
+    if names_file.exists():
+        etf_names = pd.read_csv(names_file).set_index("ticker")["name"].to_dict()
+
+    # ── Per-ticker returns for position table ─────────────────────────────────
+    all_pos = list(set(mom_longs + mom_shorts + rev_longs))
+    ticker_rets = {}
+    for t in all_pos:
+        if t not in close.columns:
+            continue
+        s = close[t].dropna()
+        def _ret(lb, _s=s):
+            if len(_s) < lb + 1:
+                return np.nan
+            return float(_s.iloc[-1] / _s.iloc[-lb-1] - 1)
+        ticker_rets[t] = {"1d": _ret(1), "5d": _ret(5), "252d": _ret(252)}
+
+    # Override 1d with live intraday return where available
+    if intra_ret_today is not None:
+        for t in all_pos:
+            if t in intra_ret_today.index:
+                ticker_rets.setdefault(t, {})["1d"] = float(intra_ret_today[t])
+
+    # ── Build charts ──────────────────────────────────────────────────────────
+    print("Building charts ...")
+    chart_b64    = build_cumret_chart(pnl_mom, pnl_rev, pnl_comb)
+    os_chart_b64 = build_os_chart(pnl_mom, pnl_rev, pnl_comb)
+
     # ── Build HTML and send ───────────────────────────────────────────────────
     html = build_html(
         run_date, last5_df, week_blocks_df, ytd_stats,
         full_stats, vix_last, ytd_stats["spy"],
         mom_longs, mom_shorts, rev_longs, rev_active,
+        etf_names=etf_names, ticker_rets=ticker_rets,
+        chart_b64=chart_b64, os_chart_b64=os_chart_b64,
     )
 
     # Save HTML locally for inspection
