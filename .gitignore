@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# generated outputs — reproducible from the scripts
+results_momentum/
+results_reversal/
+results_combined/
+results_sector/
+
+# price data — downloaded fresh each run
+data/
+
+# local HTML preview
+*.html

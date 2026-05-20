@@ -1,4 +1,0 @@
-label,ann_ret,ann_vol,sharpe,max_dd,calmar,win_rate
-ERC Momentum (L/S),0.152,0.2363,0.643,-0.4159,0.365,0.545
-ERC Reversal 5d (L-only),0.1578,0.2874,0.549,-0.5091,0.31,0.526
-Combined Equal-Vol,0.1473,0.1569,0.939,-0.2584,0.57,0.546
