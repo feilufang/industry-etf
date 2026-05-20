@@ -739,6 +739,7 @@ def main():
 
     # Save HTML locally for inspection
     out_html = HERE / "results_combined" / "daily_monitor_latest.html"
+    out_html.parent.mkdir(parents=True, exist_ok=True)
     out_html.write_text(html, encoding="utf-8")
     print(f"\nHTML report saved -> {out_html}")
 
