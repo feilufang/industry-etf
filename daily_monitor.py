@@ -24,6 +24,7 @@ from datetime import date
 
 import base64
 import io
+from email.mime.image import MIMEImage
 
 import numpy as np
 import pandas as pd
@@ -175,7 +176,7 @@ def _make_chart(series_list, title, figsize=(11, 3.5)):
     fig.savefig(buf, format="png", dpi=130, bbox_inches="tight")
     plt.close(fig)
     buf.seek(0)
-    return base64.b64encode(buf.read()).decode("ascii")
+    return buf.read()
 
 
 def build_cumret_chart(pnl_mom, pnl_rev, pnl_comb):
@@ -222,7 +223,7 @@ def build_cumret_chart(pnl_mom, pnl_rev, pnl_comb):
     fig.savefig(buf, format="png", dpi=130, bbox_inches="tight")
     plt.close(fig)
     buf.seek(0)
-    return base64.b64encode(buf.read()).decode("ascii")
+    return buf.read()
 
 
 def build_os_chart(pnl_mom, pnl_rev, pnl_comb):
@@ -263,7 +264,7 @@ def build_html(
     run_date, last5, week_blocks, ytd_stats,
     full_stats, vix_last, spy_ytd,
     mom_longs, mom_shorts, rev_longs, rev_active,
-    etf_names=None, ticker_rets=None, chart_b64=None, os_chart_b64=None
+    etf_names=None, ticker_rets=None, has_main_chart=False, has_os_chart=False
 ):
     def stat_row(s, bold=False):
         b = "<b>" if bold else ""
@@ -392,17 +393,17 @@ def build_html(
     .short-tag{background:#fdedec;color:#e74c3c}
     """
 
-    def _img_card(b64, caption):
+    def _img_card(cid, caption):
         return (
             f'<div class="card" style="padding:12px 16px">'
-            f'<img src="data:image/png;base64,{b64}" '
+            f'<img src="cid:{cid}" '
             f'style="width:100%;max-width:900px;display:block;margin:0 auto" alt="{caption}"/>'
             f'<div style="text-align:center;font-size:11px;color:#999;margin-top:4px">{caption}</div>'
             f'</div>'
         )
 
-    chart_html    = _img_card(chart_b64,    f"IS (solid) through {OS_START} · OS (dotted) thereafter") if chart_b64    else ""
-    os_chart_html = _img_card(os_chart_b64, f"Out-of-sample only — rebased to 0 at {OS_START}")        if os_chart_b64 else ""
+    chart_html    = _img_card("chart_main", f"IS (solid) through {OS_START} · OS (dotted) thereafter") if has_main_chart else ""
+    os_chart_html = _img_card("chart_os",   f"Out-of-sample only — rebased to 0 at {OS_START}")        if has_os_chart  else ""
 
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
     <style>{css}</style></head><body>
@@ -479,17 +480,27 @@ def build_html(
 
 # ── Email sender ───────────────────────────────────────────────────────────────
 
-def send_email(subject, html_body, to_addr, from_addr, app_password):
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"]    = from_addr
-    msg["To"]      = to_addr
-    msg.attach(MIMEText(html_body, "html"))
+def send_email(subject, html_body, to_addr, from_addr, app_password, images=None):
+    """images: dict of {cid_name: png_bytes} embedded via Content-ID references."""
+    msg_root = MIMEMultipart("related")
+    msg_root["Subject"] = subject
+    msg_root["From"]    = from_addr
+    msg_root["To"]      = to_addr
+
+    msg_alt = MIMEMultipart("alternative")
+    msg_root.attach(msg_alt)
+    msg_alt.attach(MIMEText(html_body, "html"))
+
+    for cid, png_bytes in (images or {}).items():
+        img = MIMEImage(png_bytes, "png")
+        img.add_header("Content-ID", f"<{cid}>")
+        img.add_header("Content-Disposition", "inline", filename=f"{cid}.png")
+        msg_root.attach(img)
 
     with smtplib.SMTP("smtp.gmail.com", 587) as server:
         server.starttls()
         server.login(from_addr, app_password)
-        server.sendmail(from_addr, to_addr, msg.as_string())
+        server.sendmail(from_addr, to_addr, msg_root.as_string())
     print(f"  Email sent to {to_addr}")
 
 
@@ -725,22 +736,30 @@ def main():
 
     # ── Build charts ──────────────────────────────────────────────────────────
     print("Building charts ...")
-    chart_b64    = build_cumret_chart(pnl_mom, pnl_rev, pnl_comb)
-    os_chart_b64 = build_os_chart(pnl_mom, pnl_rev, pnl_comb)
+    chart_bytes    = build_cumret_chart(pnl_mom, pnl_rev, pnl_comb)
+    os_chart_bytes = build_os_chart(pnl_mom, pnl_rev, pnl_comb)
 
-    # ── Build HTML and send ───────────────────────────────────────────────────
+    # ── Build HTML (uses cid: references for email) ───────────────────────────
     html = build_html(
         run_date, last5_df, week_blocks_df, ytd_stats,
         full_stats, vix_last, ytd_stats["spy"],
         mom_longs, mom_shorts, rev_longs, rev_active,
         etf_names=etf_names, ticker_rets=ticker_rets,
-        chart_b64=chart_b64, os_chart_b64=os_chart_b64,
+        has_main_chart=bool(chart_bytes), has_os_chart=bool(os_chart_bytes),
     )
 
-    # Save HTML locally for inspection
-    out_html = HERE / "results_combined" / "daily_monitor_latest.html"
-    out_html.parent.mkdir(parents=True, exist_ok=True)
-    out_html.write_text(html, encoding="utf-8")
+    # Save HTML + PNG files locally for inspection (replace cid: with file refs)
+    out_dir = HERE / "results_combined"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    local_html = html
+    if chart_bytes:
+        (out_dir / "chart_main.png").write_bytes(chart_bytes)
+        local_html = local_html.replace('src="cid:chart_main"', 'src="chart_main.png"')
+    if os_chart_bytes:
+        (out_dir / "chart_os.png").write_bytes(os_chart_bytes)
+        local_html = local_html.replace('src="cid:chart_os"', 'src="chart_os.png"')
+    out_html = out_dir / "daily_monitor_latest.html"
+    out_html.write_text(local_html, encoding="utf-8")
     print(f"\nHTML report saved -> {out_html}")
 
     if send_mail:
@@ -748,8 +767,11 @@ def main():
         ytd_pct  = f"{ytd_stats['combined']:+.1%}"
         subject  = (f"Industry ETF Monitor {run_date} | "
                     f"Week {week_pct}  YTD {ytd_pct}  VIX {vix_last:.1f}")
+        images = {}
+        if chart_bytes:    images["chart_main"] = chart_bytes
+        if os_chart_bytes: images["chart_os"]   = os_chart_bytes
         print(f"Sending email: {subject}")
-        send_email(subject, html, to_addr, gmail_user, gmail_pass)
+        send_email(subject, html, to_addr, gmail_user, gmail_pass, images=images)
     else:
         print("\nTo enable email, set environment variables:")
         print("  $env:GMAIL_USER     = 'feilu.fang@gmail.com'")
