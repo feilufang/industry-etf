@@ -19,7 +19,9 @@ import yfinance as yf
 
 HERE       = Path(__file__).parent
 DAILY_FILE = HERE / "data" / "industry_etf_daily.parquet"
-TICKER_CSV = HERE / "Industry_ETF_Tickers.csv"
+TICKER_CSV = HERE / "Industry_ETF_Tickers_filtered.csv"
+if not TICKER_CSV.exists():
+    TICKER_CSV = HERE / "Industry_ETF_Tickers.csv"
 OUT_DIR    = HERE / "results_combined"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
