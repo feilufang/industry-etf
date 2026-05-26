@@ -2,10 +2,27 @@
 
 ## Universe & Data
 
-- **114 industry ETFs** (see `Industry_ETF_Tickers.csv`)
+- **55 industry ETFs** (see `Industry_ETF_Tickers_filtered.csv`) — deduplicated from original 114
 - **Price data**: `data/industry_etf_daily.parquet` — 2016-05-16 → 2025-12-31 (2,422 days)
 - **IS window**: 2017-05-16 → 2025-12-31 (first valid signal after 252-day warmup)
-- 10 tickers with <50% coverage (newer ETFs: BAI, CRPT, DRLL, FDND, FDRV, GDOC, GTEK, METV, NUKZ, SOXQ)
+
+### Universe Deduplication (`filter_universe.py`)
+
+Greedy AUM-based deduplication: sort all ETFs by AUM descending, include each only if its max absolute pairwise correlation with already-selected ETFs is below **0.85** (trailing 252-day returns). Combined AUM of selected universe: **$166.6B**.
+
+Key substitutions made (highest-AUM representative keeps out correlated peers):
+
+| Representative | AUM | Dropped (corr ≥ 0.85) |
+|---|---|---|
+| SMH | $58.8B | SOXX (0.98), SOXQ (0.99), FTXL (0.96), PSI (0.94), XSD (0.88), IGPT, BAI, IGM |
+| ITA | $13.6B | PPA (0.97), XAR (0.93) |
+| PAVE | $13.4B | AIRR (0.92), IFRA (0.89), PKB (0.94) |
+| IGV | $12.1B | SKYY (0.89), WCLD (0.88), CIBR (0.87), XSW (0.90) |
+| XBI | $8.3B | IBB (0.91), SBIO (0.95) |
+| KBWB | $5.5B | KBE (0.89), KRE (0.87), IYG (0.92), IAT (0.92), FTXO (0.97) |
+| XOP | $3.6B | IEO (0.98), FCG (0.97), PXE (0.99), FTXN (0.95), DRLL (0.94) |
+| ITB | $2.5B | XHB (0.97) |
+| IYT | $2.0B | XTN (0.90) |
 
 ---
 
@@ -168,66 +185,141 @@ Avg allocation: 56% Momentum / 44% Reversal. Sharpe nearly doubles vs components
 ERC Momentum (252d, quartile L/S, always-on) + ERC Reversal (5d, long-only quartile, VIX > 20 gated).  
 Sized by rolling 252d equal-vol weights. **Best result overall.**
 
+Results on **filtered 55-ticker universe** (`combined_vix_gated.py`):
+
 | Strategy | Ann Ret | Ann Vol | Sharpe | Max DD | Calmar | SPY corr |
 |---|---|---|---|---|---|---|
-| ERC Momentum (L/S) | +15.20% | 23.63% | 0.643 | -41.59% | 0.365 | -0.145 |
-| ERC Reversal (VIX>20) | +20.04% | 24.61% | 0.814 | -44.35% | 0.452 | +0.761 |
-| **Combined Equal-Vol** | **+15.31%** | **14.09%** | **1.087** | **-21.44%** | **0.714** | **+0.459** |
+| ERC Momentum (L/S) | +11.99% | 20.67% | 0.580 | -34.13% | 0.351 | -0.138 |
+| ERC Reversal (VIX>20) | +18.90% | 22.98% | 0.823 | -41.82% | 0.452 | +0.778 |
+| **Combined Equal-Vol** | **+13.58%** | **12.90%** | **1.052** | **-18.99%** | **0.715** | **+0.458** |
 
-Avg allocation: 47% Momentum / 53% Reversal.
+Avg allocation: 48.5% Momentum / 51.5% Reversal.
 
 **Why this works:**
 - The VIX > 20 gate (active 34% of days) prevents the reversal from trading in low-vol regimes where mean-reversion is unreliable
 - When reversal is flat (VIX ≤ 20), momentum carries the portfolio at low vol
 - When reversal is active (VIX > 20), it provides large positive P&L that is partially uncorrelated with momentum
 - The two strategies have daily P&L correlation of approximately **-0.15 to -0.25**, providing genuine diversification
-- Combined vol (14.1%) is far below either component (23–25%), confirming near-additive diversification benefit
+- Combined vol (12.9%) is far below either component (21–23%), confirming near-additive diversification benefit
 
-### Annual Returns — Combined (VIX>20 Gated)
+### Annual Returns — Combined (VIX>20 Gated, 55-ticker filtered universe)
 
 | Year | Combined | Momentum | Reversal |
 |---|---|---|---|
-| 2018 | +2.5% | +2.2% | +1.3% |
-| 2019 | +12.1% | +5.3% | +19.6% |
-| 2020 | +49.1% | +65.2% | +55.0% |
-| 2021 | +2.4% | -16.9% | +22.7% |
-| 2022 | +36.2% | +55.3% | +10.8% |
-| 2023 | +6.3% | -3.0% | +16.9% |
-| 2024 | +13.6% | +22.3% | +7.4% |
-| 2025 | +3.2% | -5.7% | +13.7% |
+| 2018 | +1.4% | -0.3% | +1.6% |
+| 2019 | +5.5% | -3.6% | +16.9% |
+| 2020 | +44.6% | +55.8% | +52.9% |
+| 2021 | +4.7% | -13.0% | +22.5% |
+| 2022 | +34.4% | +45.9% | +14.8% |
+| 2023 | +4.4% | -5.7% | +16.0% |
+| 2024 | +12.8% | +21.3% | +7.5% |
+| 2025 | +2.8% | -2.8% | +8.2% |
 
-The complementary nature is clear: 2021 (momentum -16.9%, reversal +22.7%) and 2022 (momentum +55.3%, reversal +10.8%) are the clearest examples of the two legs offsetting each other.
+The complementary nature is clear: 2021 (momentum -13.0%, reversal +22.5%) and 2022 (momentum +45.9%, reversal +14.8%) are the clearest examples of the two legs offsetting each other.
 
 ---
 
-## 4. Key Takeaways
+## 4. Portfolio Sizing Alternatives (`cluster_momentum.py`, `cluster_voltarget.py`, `hybrid_strategy.py`)
 
-1. **Momentum long leg is strong** (Sharpe 0.88); the short leg is a structural drag (-7.1% p.a.). The full L/S is still worthwhile for its hedging properties.
+Tested two alternative sizing approaches for the momentum leg and compared them to standard ERC via three-way backtest. All strategies normalised to $10,000 annualised vol for fair comparison.
 
-2. **Short-term reversal is a regime signal**, not an always-on strategy. It works when VIX > 20 (fear/dislocation) and fails in calm markets.
+### 4.1 Approach: Cluster-Based Sizing
+
+Ward hierarchical clustering on correlation distance `sqrt(0.5*(1−ρ))`. Active clusters = min(n_long_clusters, n_short_clusters). Two variants tested:
+
+- **Equal-notional clusters** — each cluster gets equal dollar weight within its leg
+- **Vol-target clusters** — each cluster sized to $1,000 1d 1-sigma; total leg exposure = n_active × $1,000
+
+### 4.2 Three-Way Comparison (normalised to $10,000 ann vol, filtered 55-ticker universe)
+
+| Strategy | Sharpe | Ann P&L | Max DD | Calmar | SPY corr |
+|---|---|---|---|---|---|
+| **ERC Combined** | **1.052** | $10,521 | -$15,930 | **0.661** | **+0.458** |
+| Hybrid (ClusterVT mom + ERC rev) | 0.987 | $9,867 | -$16,219 | 0.608 | +0.611 |
+| Cluster VT Combined | 0.732 | $7,322 | -$19,632 | 0.373 | +0.608 |
+
+Momentum legs head-to-head (normalised):
+
+| Leg | Sharpe | Max DD |
+|---|---|---|
+| ERC Momentum | 0.580 | -$19,573 |
+| Cluster VT Momentum | 0.541 | -$17,435 |
+
+**Conclusion:** ERC Combined wins on all metrics. The cluster vol-targeting approach does not add alpha after normalisation — its earlier apparent outperformance (before normalisation) was an artifact of dollar-unit amplification in high-VIX periods. With a clean deduplicated universe, cluster counts are lower and the approach loses its diversification advantage. Standard ERC is simpler and better.
+
+---
+
+## 5. Reversal VIX Bucket Analysis (`reversal_vix_buckets.py`)
+
+Ran reversal ungated on all days; bucketed daily P&L by prev-day VIX level.
+
+### 5.1 Full Period (2018+)
+
+| VIX Bucket | Days | % Days | Ann Ret | Sharpe | Win Rate |
+|---|---|---|---|---|---|
+| <15 | 538 | 24% | +15.5% | 1.113 | 53.5% |
+| **15–20** | **791** | **35%** | **-12.1%** | **-0.619** | **51.3%** |
+| 20–25 | 412 | 18% | +31.5% | 1.272 | 55.1% |
+| 25–30 | 211 | 9% | +34.5% | 1.008 | 55.0% |
+| 30–40 | 115 | 5% | +78.9% | 1.864 | 56.5% |
+| 40+ | 39 | 2% | +173.1% | 1.846 | 64.1% |
+| **All days** | 2264 | 100% | +16.6% | 0.652 | 53.5% |
+
+### 5.2 Sharpe: All Days vs VIX > 20 Gate
+
+| Period | All days | VIX > 20 only |
+|---|---|---|
+| Full (2018+) | 0.631 | 1.262 |
+| Post-2019 (2020+) | 0.636 | 1.182 |
+| Post-2022 (2023+) | 0.977 | 2.090 |
+| Post-2023 (2024+) | 0.982 | 2.307 |
+
+### 5.3 Key Findings
+
+1. **VIX 15–20 is the structural dead zone** — Sharpe -0.62, 35% of all trading days. This is not driven by a few disaster days: mean daily return is -0.046% across 795 days with win rate 51.3% (consistent slight negative edge). VIX 15–20 is a transition regime where momentum is breaking down but mean-reversion has not yet kicked in — whipsaw conditions.
+
+2. **VIX < 15 also works** (Sharpe 1.11) — low-vol mean reversion. A different mechanism (oversold ETFs snap back quickly in calm markets).
+
+3. **VIX > 20 gate is well-placed** — captures both the stress-reversion regime (VIX 20–40) and panic regime (VIX 40+) while avoiding the dead zone. Adding the <15 bucket could improve total return but would increase complexity.
+
+4. **The gate has strengthened post-2022** — VIX > 20 Sharpe was 1.26 full-period, 2.09 in 2023+, 2.31 in 2024+. No evidence of decay. The 15–20 bucket has partially recovered post-2022 (from -0.62 to +0.24 Sharpe) but remains the weakest regime by far.
+
+5. **VIX > 20 gate is not too conservative** — the dead zone (15–20) bleeds -12% annualised and accounts for 35% of all days. Lowering the gate to VIX > 15 (to capture the <15 bucket) would include the dead zone and hurt Sharpe.
+
+---
+
+## 6. Key Takeaways
+
+1. **Momentum long leg is strong** (Sharpe 0.88 on 114-ticker universe); the short leg is a structural drag (-7.1% p.a.). The full L/S is still worthwhile for its hedging properties.
+
+2. **Short-term reversal is a regime signal**, not an always-on strategy. It works when VIX > 20 (fear/dislocation) and actively hurts returns in VIX 15–20 (Sharpe -0.62). The gate is well-placed and has strengthened post-2022 (Sharpe 2.3 in 2024+).
 
 3. **Signal blending underperforms strategy blending** — combining at the signal level forces stocks to satisfy both criteria simultaneously, losing alpha from both edges. Running separate strategies and allocating at the portfolio level is superior.
 
-4. **ERC is the best optimizer** for this universe — equal risk contribution handles the heterogeneous volatility of industry ETFs better than Min Var (too concentrated) or MDP (similar to Min Var in practice).
+4. **ERC is the best optimizer** for this universe — equal risk contribution handles the heterogeneous volatility of industry ETFs better than Min Var (too concentrated) or MDP (similar to Min Var in practice). Cluster vol-targeting does not add alpha after normalisation on a clean universe.
 
-5. **Best standalone**: ERC Reversal VIX>20 (Sharpe 0.776–0.814 depending on basket size)  
-   **Best combined**: ERC Momentum + ERC Reversal VIX>20 at equal-vol weights (Sharpe **1.087**, MaxDD **-21.4%**)
+5. **Universe deduplication** (114 → 55 tickers, corr threshold 0.85) removes redundant ETFs tracking the same sector. Sharpe is nearly unchanged (1.052 vs 1.089) confirming the alpha is in the signal, not in having duplicate exposures.
+
+6. **Best standalone**: ERC Reversal VIX>20 (Sharpe 0.823 on filtered universe)  
+   **Best combined**: ERC Momentum + ERC Reversal VIX>20 at equal-vol weights (Sharpe **1.052**, MaxDD **-19.0%**, SPY corr **+0.46**)
 
 ---
 
-## 5. Output Files
+## 7. Output Files
 
 | Directory | Contents |
 |---|---|
 | `results_momentum/` | Cumret plots, monthly heatmaps, stats CSV for all opt methods and quartile/tercile comparison |
 | `results_reversal/` | AR(1) distribution, XS reversal cumrets, long-only reversal by N, VIX filter comparison, monthly heatmaps |
-| `results_combined/` | Combined strategy cumret + allocation panel, monthly heatmaps, stats CSVs |
+| `results_combined/` | Combined strategy cumret + allocation panel, monthly heatmaps, stats CSVs, VIX bucket chart |
+| `results_cluster/` | Cluster-based sizing comparison, hybrid strategy chart |
 
-## 6. Scripts
+## 8. Scripts
 
 | Script | Purpose |
 |---|---|
 | `download_history.py` | Download 10yr daily prices via yfinance → parquet |
+| `filter_universe.py` | Deduplicate universe by AUM + correlation (0.85 threshold) → filtered CSV |
 | `momentum_backtest.py` | ERC/HRP/MinVar/MDP/EqualVol momentum backtest, quartile vs tercile |
 | `reversal_analysis.py` | XS reversal, AR(1) analysis, long-only reversal, ERC reversal |
 | `reversal_topn.py` | Long-only reversal for fixed N bottom names (1,3,5,10,15) |
@@ -236,3 +328,8 @@ The complementary nature is clear: 2021 (momentum -16.9%, reversal +22.7%) and 2
 | `signal_combined_erc.py` | Signal-level z-score blend → single ERC portfolio |
 | `combined_strategy.py` | Strategy-level equal-vol combination (ungated reversal) |
 | `combined_vix_gated.py` | Strategy-level equal-vol combination (VIX>20 gated reversal) ⭐ |
+| `cluster_momentum.py` | Equal-notional cluster sizing vs standard ERC comparison |
+| `cluster_voltarget.py` | Vol-target cluster sizing ($1k/cluster 1d 1-sigma) |
+| `hybrid_strategy.py` | Three-way comparison: ERC vs Cluster VT vs Hybrid |
+| `reversal_vix_buckets.py` | Reversal P&L breakdown by VIX bucket (<15, 15–20, 20–25, …) |
+| `daily_monitor.py` | Daily email monitor — intraday prices, position tables, charts |
