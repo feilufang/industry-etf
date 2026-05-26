@@ -529,9 +529,13 @@ def main():
     vix_last = float(vix.iloc[-1])
 
     # ── Industry prices ───────────────────────────────────────────────────────
+    _ticker_file = HERE / "Industry_ETF_Tickers_filtered.csv"
+    if not _ticker_file.exists():
+        _ticker_file = HERE / "Industry_ETF_Tickers.csv"
     ind_tickers = [t.strip() for t in
-                   (HERE / "Industry_ETF_Tickers.csv").read_text(encoding="utf-8-sig")
+                   _ticker_file.read_text(encoding="utf-8-sig")
                    .strip().splitlines() if t.strip()]
+    print(f"Universe: {len(ind_tickers)} tickers ({_ticker_file.name})")
     close = pd.read_parquet(HERE / "data" / "industry_etf_daily.parquet")
     close = close[[t for t in ind_tickers if t in close.columns]].sort_index()
     close = close.where(close.gt(0)).ffill()
