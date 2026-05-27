@@ -44,6 +44,7 @@ REV_LB     = 5
 COV_WIN    = 252
 VOL_WIN    = 252
 VIX_GATE   = 20
+TRAIL_DAYS = 63
 
 
 # ── ERC helpers ───────────────────────────────────────────────────────────────
@@ -227,20 +228,19 @@ def build_cumret_chart(pnl_mom, pnl_rev, pnl_comb):
 
 
 def build_os_chart(pnl_mom, pnl_rev, pnl_comb):
-    """OS-only chart: cumulative return rebased to 0 at OS_START."""
+    """Trailing 63-day cumulative return chart, rebased to 0 at start of window."""
     series = [
         (pnl_comb, "Combined",           "#2ca02c", 2.2),
         (pnl_mom,  "Momentum",           "#1f77b4", 1.4),
         (pnl_rev,  "Reversal (VIX>20)",  "#ff7f0e", 1.4),
     ]
-    # Clip to OS window
-    os_series = [(s[0][s[0].index >= OS_START],) + s[1:] for s in series]
-    # Check any data exists
-    if all(len(s[0]) == 0 for s in os_series):
+    trail_series = [(s[0].iloc[-TRAIL_DAYS:],) + s[1:] for s in series]
+    if all(len(s[0]) == 0 for s in trail_series):
         return None
+    start_date = trail_series[0][0].index[0]
     return _make_chart(
-        os_series,
-        title=f"Out-of-Sample Performance (from {OS_START})",
+        trail_series,
+        title=f"Trailing {TRAIL_DAYS}-Day Performance (from {start_date})",
         figsize=(11, 3.2),
     )
 
@@ -403,7 +403,7 @@ def build_html(
         )
 
     chart_html    = _img_card("chart_main", f"IS (solid) through {OS_START} · OS (dotted) thereafter") if has_main_chart else ""
-    os_chart_html = _img_card("chart_os",   f"Out-of-sample only — rebased to 0 at {OS_START}")        if has_os_chart  else ""
+    os_chart_html = _img_card("chart_os",   f"Trailing {TRAIL_DAYS}-day cumulative return")             if has_os_chart  else ""
 
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
     <style>{css}</style></head><body>
