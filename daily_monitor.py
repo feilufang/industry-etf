@@ -529,7 +529,9 @@ def main():
     vix_last = float(vix.iloc[-1])
 
     # ── Industry prices ───────────────────────────────────────────────────────
-    _ticker_file = HERE / "Industry_ETF_Tickers_filtered.csv"
+    _ticker_file = HERE / "Industry_ETF_Tickers_liquid.csv"
+    if not _ticker_file.exists():
+        _ticker_file = HERE / "Industry_ETF_Tickers_filtered.csv"
     if not _ticker_file.exists():
         _ticker_file = HERE / "Industry_ETF_Tickers.csv"
     ind_tickers = [t.strip() for t in
