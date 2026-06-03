@@ -45,6 +45,7 @@ COV_WIN    = 252
 VOL_WIN    = 252
 VIX_GATE   = 20
 TRAIL_DAYS = 63
+NOTIONAL   = 10_000
 
 
 # ── ERC helpers ───────────────────────────────────────────────────────────────
@@ -260,11 +261,48 @@ def color_cell(v, good_pos=True):
         color = "#e74c3c" if pos else "#27ae60"
     return f'<td style="color:{color};font-weight:600">{v:+.2%}</td>'
 
+def _target_shares_html(target_shares, etf_names, vix_last, rev_active):
+    if not target_shares:
+        return ""
+    longs  = sorted([(t, q) for t, q in target_shares.items() if q > 0], key=lambda x: -x[1])
+    shorts = sorted([(t, q) for t, q in target_shares.items() if q < 0], key=lambda x:  x[1])
+    rows = ""
+    for t, q in longs:
+        name = (etf_names or {}).get(t, "")
+        rows += (f"<tr><td style='color:#27ae60;font-weight:700'>LONG</td>"
+                 f"<td style='font-weight:700'>{t}</td><td style='color:#555'>{name}</td>"
+                 f"<td style='text-align:right;font-weight:700'>{q}</td></tr>")
+    for t, q in shorts:
+        name = (etf_names or {}).get(t, "")
+        rows += (f"<tr><td style='color:#e74c3c;font-weight:700'>SHORT</td>"
+                 f"<td style='font-weight:700'>{t}</td><td style='color:#555'>{name}</td>"
+                 f"<td style='text-align:right;font-weight:700'>{q}</td></tr>")
+    rev_note = "active" if rev_active else f"inactive (VIX={vix_last:.1f} &le; {VIX_GATE})"
+    return f"""
+    <div class="card">
+      <h2>Target Positions &mdash; ${NOTIONAL:,}/side MOC &nbsp;
+        <span style="font-size:12px;color:#888;font-weight:400">
+          Reversal {rev_note}
+        </span>
+      </h2>
+      <table style="width:100%;border-collapse:collapse">
+        <tr style="background:#f5f5f5">
+          <th style="text-align:left;padding:5px 8px">Side</th>
+          <th style="text-align:left;padding:5px 8px">Ticker</th>
+          <th style="text-align:left;padding:5px 8px">Name</th>
+          <th style="text-align:right;padding:5px 8px">Shares</th>
+        </tr>
+        {rows}
+      </table>
+    </div>"""
+
+
 def build_html(
     run_date, last5, week_blocks, ytd_stats,
     full_stats, vix_last, spy_ytd,
     mom_longs, mom_shorts, rev_longs, rev_active,
-    etf_names=None, ticker_rets=None, has_main_chart=False, has_os_chart=False
+    etf_names=None, ticker_rets=None, has_main_chart=False, has_os_chart=False,
+    target_shares=None,
 ):
     def stat_row(s, bold=False):
         b = "<b>" if bold else ""
@@ -471,6 +509,8 @@ def build_html(
       </table>
     </div>
 
+    {_target_shares_html(target_shares, etf_names, vix_last, rev_active)}
+
     <div style="color:#aaa;font-size:11px;text-align:center;margin-top:12px">
       ERC Momentum (252d quartile L/S) + ERC Reversal (5d quartile, VIX&gt;20 gated) | Equal-vol combined
     </div>
@@ -645,6 +685,24 @@ def main():
         today_row = None
         intra_ret_today = None
 
+    # ── Target shares for today's orders ─────────────────────────────────────
+    price_ref = latest_price if (today_row is not None and latest_price is not None) else close.iloc[-1]
+    def _target_shares(weights):
+        out = {}
+        for t, w in weights.items():
+            if abs(w) < 1e-4: continue
+            p = float(price_ref.get(t, 0) or 0)
+            if p <= 0: continue
+            qty = int(round(abs(w) * NOTIONAL / p))
+            if qty: out[t] = qty if w > 0 else -qty
+        return out
+
+    target_shares = _target_shares(mom_weights)
+    if rev_active:
+        for t, q in _target_shares(rev_weights).items():
+            target_shares[t] = target_shares.get(t, 0) + q
+    target_shares = {t: q for t, q in target_shares.items() if q != 0}
+
     # ── Last 5 days ───────────────────────────────────────────────────────────
     last5_dates = pnl_comb.index[-5:].tolist()
     rows = []
@@ -752,6 +810,7 @@ def main():
         mom_longs, mom_shorts, rev_longs, rev_active,
         etf_names=etf_names, ticker_rets=ticker_rets,
         has_main_chart=bool(chart_bytes), has_os_chart=bool(os_chart_bytes),
+        target_shares=target_shares,
     )
 
     # Save HTML + PNG files locally for inspection (replace cid: with file refs)
