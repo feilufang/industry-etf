@@ -690,9 +690,9 @@ def main():
     def _target_shares(weights):
         out = {}
         for t, w in weights.items():
-            if abs(w) < 1e-4: continue
+            if not np.isfinite(w) or abs(w) < 1e-4: continue
             p = float(price_ref.get(t, 0) or 0)
-            if p <= 0: continue
+            if not np.isfinite(p) or p <= 0: continue
             qty = int(round(abs(w) * NOTIONAL / p))
             if qty: out[t] = qty if w > 0 else -qty
         return out
