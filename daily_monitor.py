@@ -261,7 +261,7 @@ def color_cell(v, good_pos=True):
         color = "#e74c3c" if pos else "#27ae60"
     return f'<td style="color:{color};font-weight:600">{v:+.2%}</td>'
 
-def _target_shares_html(target_shares, etf_names, vix_last, rev_active):
+def _target_shares_html(target_shares, etf_names, vix_last, rev_active, vix_gate=None, vix_gate_date=None):
     if not target_shares:
         return ""
     longs  = sorted([(t, q) for t, q in target_shares.items() if q > 0], key=lambda x: -x[1])
@@ -277,7 +277,9 @@ def _target_shares_html(target_shares, etf_names, vix_last, rev_active):
         rows += (f"<tr><td style='color:#e74c3c;font-weight:700'>SHORT</td>"
                  f"<td style='font-weight:700'>{t}</td><td style='color:#555'>{name}</td>"
                  f"<td style='text-align:right;font-weight:700'>{q}</td></tr>")
-    rev_note = "active" if rev_active else f"inactive (VIX={vix_last:.1f} &le; {VIX_GATE})"
+    gate_v = vix_gate if vix_gate is not None else vix_last
+    gate_d = f" ({vix_gate_date})" if vix_gate_date else ""
+    rev_note = f"active (signal VIX={gate_v:.1f}{gate_d})" if rev_active else f"inactive (signal VIX={gate_v:.1f}{gate_d} &le; {VIX_GATE})"
     return f"""
     <div class="card">
       <h2>Target Positions &mdash; ${NOTIONAL:,}/side MOC &nbsp;
@@ -302,7 +304,7 @@ def build_html(
     full_stats, vix_last, spy_ytd,
     mom_longs, mom_shorts, rev_longs, rev_active,
     etf_names=None, ticker_rets=None, has_main_chart=False, has_os_chart=False,
-    target_shares=None,
+    target_shares=None, vix_gate=None, vix_gate_date=None,
 ):
     def stat_row(s, bold=False):
         b = "<b>" if bold else ""
@@ -509,7 +511,7 @@ def build_html(
       </table>
     </div>
 
-    {_target_shares_html(target_shares, etf_names, vix_last, rev_active)}
+    {_target_shares_html(target_shares, etf_names, vix_last, rev_active, vix_gate=vix_gate, vix_gate_date=vix_gate_date)}
 
     <div style="color:#aaa;font-size:11px;text-align:center;margin-top:12px">
       ERC Momentum (252d quartile L/S) + ERC Reversal (5d quartile, VIX&gt;20 gated) | Equal-vol combined
@@ -566,7 +568,7 @@ def main():
     vix.index = vix.index.tz_localize(None).strftime("%Y-%m-%d")
     spy_ret = spy_raw["Close"].squeeze().pct_change().dropna()
     spy_ret.index = spy_ret.index.tz_localize(None).strftime("%Y-%m-%d")
-    vix_last = float(vix.iloc[-1])
+    vix_last = float(vix.iloc[-1])          # current intraday VIX (for display)
 
     # ── Industry prices ───────────────────────────────────────────────────────
     _ticker_file = HERE / "Industry_ETF_Tickers_liquid.csv"
@@ -599,7 +601,11 @@ def main():
     # ── Current positions (needed before intraday) ────────────────────────────
     mom_longs  = sorted(mom_weights[mom_weights > 0.001].index.tolist())
     mom_shorts = sorted(mom_weights[mom_weights < -0.001].index.tolist())
-    rev_active = vix_last > VIX_GATE
+    # Reversal gate uses previous CLOSE VIX (close.index[-1]), not today's intraday.
+    # e.g. script runs at 10am June 8: close[-1]=June 5, vix(June 5)=21.5 → ACTIVE.
+    vix_gate_date = close.index[-1]
+    vix_gate      = float(vix.get(vix_gate_date, vix_last))
+    rev_active    = vix_gate > VIX_GATE
     if rev_active:
         rev_longs = sorted(rev_weights[rev_weights > 0.001].index.tolist())
     else:
@@ -771,7 +777,7 @@ def main():
     if rev_active:
         print(f"Reversal longs  ({len(rev_longs)}): {', '.join(rev_longs)}")
     else:
-        print(f"Reversal: inactive (VIX={vix_last:.1f} <= {VIX_GATE})")
+        print(f"Reversal: inactive (signal VIX={vix_gate:.1f} on {vix_gate_date} <= {VIX_GATE})")
 
     # ── Load ETF names ────────────────────────────────────────────────────────
     names_file = HERE / "etf_names.csv"
@@ -810,7 +816,7 @@ def main():
         mom_longs, mom_shorts, rev_longs, rev_active,
         etf_names=etf_names, ticker_rets=ticker_rets,
         has_main_chart=bool(chart_bytes), has_os_chart=bool(os_chart_bytes),
-        target_shares=target_shares,
+        target_shares=target_shares, vix_gate=vix_gate, vix_gate_date=vix_gate_date,
     )
 
     # Save HTML + PNG files locally for inspection (replace cid: with file refs)
